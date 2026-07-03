@@ -1,15 +1,19 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using BepInEx;
 using HarmonyLib;
 using ManagementScripts;
+using Newtonsoft.Json.Linq;
 using PropertiesScripts;
 using SettingScripts;
 using SimulationScripts;
 using SimulationScripts.BibiteScripts;
+using UIScripts;
 using UnityEngine;
 
 namespace Bibites_Predatory_Obstacle
 {
+    // startup lol, if it wasnt obv
+
     [BepInPlugin("Immortality", "Predatory Obstacle", "1.0.0")]
     public class Plugin : BaseUnityPlugin
     {
@@ -19,24 +23,98 @@ namespace Bibites_Predatory_Obstacle
         }
     }
 
+    // variables
+
     public static class GoTowardsHome
     {
         public static float Delay = 5f;
+        public static bool ManualDestroy = false;
+
+        public static readonly Color Blue = Color.blue;
+        public static readonly Color Purple = new Color(0.5f, 0, 0.5f);
+        public static readonly Color White = Color.white;
 
         public static Dictionary<BibiteBody, float> LastSeenPrey = new Dictionary<BibiteBody, float>();
-
         public static Dictionary<BibiteBody, BibiteBody> CurrentTarget = new Dictionary<BibiteBody, BibiteBody>();
-
+        public static Dictionary<BibiteBody, BibiteBody> TargetedBy = new Dictionary<BibiteBody, BibiteBody>();
         public static Dictionary<BibiteBody, ZoneSettings> Home = new Dictionary<BibiteBody, ZoneSettings>();
+
+        public static void DetermineZone(BibiteBody bibite)
+        {
+            if (bibite.gene.speciesTag != "333immortal" || bibite.gene.GetBodyColor() == Blue) return;
+            if (Home.ContainsKey(bibite)) return;
+
+            Vector2 pos = bibite.transform.position;
+            float simSize = ScenarioIndependentSettings.Instance.SimulationSize.val;
+            List<ZoneSettings> allZones = ScenarioSettings.Instance.allZones;
+
+            foreach (ZoneSettings zone in allZones)
+            {
+                Vector2 zoneCenter = new Vector2(zone.posX.val, zone.posY.val) * simSize;
+                float radius = zone.absoluteRadius;
+                float distSq = (pos - zoneCenter).sqrMagnitude;
+
+                if (distSq <= radius * radius)
+                {
+                    Home[bibite] = zone;
+                    break;
+                }
+            }
+        }
+        public static void SetTarget(BibiteBody predator, BibiteBody prey)
+        {
+            if (CurrentTarget.TryGetValue(predator, out BibiteBody oldPrey))
+            {
+                TargetedBy.Remove(oldPrey);
+            }
+            CurrentTarget[predator] = prey;
+            TargetedBy[prey] = predator;
+        }
+        public static void ClearTarget(BibiteBody predator)
+        {
+            if (CurrentTarget.TryGetValue(predator, out BibiteBody prey))
+            {
+                TargetedBy.Remove(prey);
+            }
+            CurrentTarget.Remove(predator);
+        }
+        public static void Cleanup()
+        {
+            LastSeenPrey.Clear();
+            CurrentTarget.Clear();
+            TargetedBy.Clear();
+            Home.Clear();
+            ManualDestroy = false;
+        }
     }
+
+    // this is just all the code for bibite actions
 
     [HarmonyPatch(typeof(BibiteBody), nameof(BibiteBody.Die))]
     public static class NullifyDeath
     {
         static bool Prefix(BibiteBody __instance, bool swallowed)
         {
-            return __instance.gene.speciesTag != "333immortal";
+            if (__instance.gene.speciesTag != "333immortal") return true;
+
+            if (GoTowardsHome.ManualDestroy) return true;
+
+            return false;
         }
+    }
+
+    [HarmonyPatch(typeof(BibiteStatsPanel), "KillCurrentBibite")]
+    public static class UnnullifyDeath
+    {
+        static void Prefix() => GoTowardsHome.ManualDestroy = true;
+        static void Postfix() => GoTowardsHome.ManualDestroy = false;
+    }
+
+    [HarmonyPatch(typeof(UserActions), "KillHalfBibites")]
+    public static class AlsoUnnullifyDeath
+    {
+        static void Prefix() => GoTowardsHome.ManualDestroy = true;
+        static void Postfix() => GoTowardsHome.ManualDestroy = false;
     }
 
     [HarmonyPatch(typeof(BibiteBody), nameof(BibiteBody.Hurting))]
@@ -44,7 +122,7 @@ namespace Bibites_Predatory_Obstacle
     {
         static bool Prefix(BibiteBody __instance, ref float __result)
         {
-            if (__instance.gene.speciesTag == "333immortal")
+            if (__instance.gene.speciesTag == "333immortal" && !__instance.dying && !__instance.dead)
             {
                 __result = 0;
                 return false;
@@ -58,7 +136,7 @@ namespace Bibites_Predatory_Obstacle
     {
         static bool Prefix(BibiteBody __instance)
         {
-            return __instance.gene.speciesTag != "333immortal";
+            return __instance.gene.speciesTag != "333immortal" || __instance.dying || __instance.dead;
         }
     }
 
@@ -67,7 +145,7 @@ namespace Bibites_Predatory_Obstacle
     {
         static bool Prefix(BibiteBody __instance)
         {
-            return __instance.gene.speciesTag != "333immortal";
+            return __instance.gene.speciesTag != "333immortal" || __instance.dying || __instance.dead;
         }
     }
 
@@ -88,14 +166,12 @@ namespace Bibites_Predatory_Obstacle
     [HarmonyPatch(typeof(BibiteMouth), "TryGrabTarget")]
     public static class NullifyGrabUselessMatter
     {
-        public static readonly AccessTools.FieldRef<BibiteOrgan, BibiteGenes> GenesRef = AccessTools.FieldRefAccess<BibiteOrgan, BibiteGenes>("genes");
-
         static bool Prefix(BibiteMouth __instance, GrabbableObject targetToGrab)
         {
-            BibiteGenes genes = GenesRef(__instance);
+            BibiteGenes genes = Cache.genes(__instance);
             BibiteBody targetBody = targetToGrab.GetComponentInParent<BibiteBody>();
 
-            if (targetBody != null && targetBody.gene.speciesTag == "333immortal") return false;
+            if (targetBody != null && targetBody.gene.speciesTag == "333immortal" && !targetBody.dying && !targetBody.dead) return false;
 
             if (genes.speciesTag == "333immortal")
             {
@@ -113,10 +189,9 @@ namespace Bibites_Predatory_Obstacle
     [HarmonyPatch(typeof(BibiteMouth), "TrySwallowTarget")]
     public static class NullifyEatUselessMatter
     {
-        public static readonly AccessTools.FieldRef<BibiteOrgan, BibiteGenes> GenesRef = AccessTools.FieldRefAccess<BibiteOrgan, BibiteGenes>("genes");
         static bool Prefix(BibiteMouth __instance, GameObject target, ref bool __result)
         {
-            BibiteGenes genes = GenesRef(__instance);
+            BibiteGenes genes = Cache.genes(__instance);
 
             if (genes.speciesTag == "333immortal")
             {
@@ -140,16 +215,14 @@ namespace Bibites_Predatory_Obstacle
             BibiteBody body = __instance.GetComponent<BibiteBody>();
             if (body == null || body.gene.speciesTag != "333immortal") return;
 
-            Traverse t = Traverse.Create(__instance);
+            Cache.nPlantsInRange(__instance) = 0;
+            Cache.nMeatsInRange(__instance) = 0;
+            Cache.nCorpsesInRange(__instance) = 0;
 
-            t.Field("nPlantsInRange").SetValue(0);
-            t.Field("nMeatsInRange").SetValue(0);
-            t.Field("nCorpsesInRange").SetValue(0);
-
-            int nBibites = t.Field("nBibitesInRange").GetValue<int>();
+            int nBibites = Cache.nBibitesInRange(__instance);
             int closestIndex = -1;
-            bool isSpecial = body.gene.GetBodyColor() == new Color(0.5f, 0, 0.5f);
-            bool isMixed = body.gene.GetBodyColor() == new Color(1, 1, 1);
+            bool isSpecial = body.gene.GetBodyColor() == GoTowardsHome.Purple;
+            bool isMixed = body.gene.GetBodyColor() == GoTowardsHome.White;
             float Value = float.MaxValue;
             if (isSpecial || isMixed) Value = float.MinValue;
 
@@ -170,8 +243,8 @@ namespace Bibites_Predatory_Obstacle
                 else if (isMixed)
                 {
                     float maturity = seen.growth.maturity;
-                    float dist = Vector2.Distance(body.transform.position, seen.transform.position);
-                    float score = (maturity * (maturity + 1)) / ((dist * 0.75f) + 1f);
+                    float distance = (body.transform.position - seen.transform.position).sqrMagnitude;
+                    float score = (maturity * (maturity + 1)) / (distance * 0.02f + 1f);
                     if (score > Value)
                     {
                         Value = score;
@@ -180,10 +253,10 @@ namespace Bibites_Predatory_Obstacle
                 }
                 else
                 {
-                    float dSq = (seen.transform.position - __instance.transform.position).sqrMagnitude;
-                    if (dSq < Value)
+                    float distance = (seen.transform.position - body.transform.position).sqrMagnitude;
+                    if (distance < Value)
                     {
-                        Value = dSq;
+                        Value = distance;
                         closestIndex = i;
                     }
                 }
@@ -193,14 +266,14 @@ namespace Bibites_Predatory_Obstacle
             {
                 __instance.seenBibites[0] = __instance.seenBibites[closestIndex];
                 __instance.bibiteWeights[0] = __instance.bibiteWeights[closestIndex];
-                t.Field("nBibitesInRange").SetValue(1);
+                Cache.nBibitesInRange(__instance) = 1;
                 GoTowardsHome.LastSeenPrey[body] = Time.time;
-                GoTowardsHome.CurrentTarget[body] = __instance.seenBibites[0];
+                GoTowardsHome.SetTarget(body, __instance.seenBibites[0]);
             }
             else
             {
-                t.Field("nBibitesInRange").SetValue(0);
-                GoTowardsHome.CurrentTarget.Remove(body);
+                Cache.nBibitesInRange(__instance) = 0;
+                GoTowardsHome.ClearTarget(body);
             }
         }
     }
@@ -208,10 +281,9 @@ namespace Bibites_Predatory_Obstacle
     [HarmonyPatch(typeof(BibiteMouth), "UpdateBitePeriod")]
     public static class FixedBitePeriod
     {
-        public static readonly AccessTools.FieldRef<BibiteOrgan, BibiteGenes> GenesRef = AccessTools.FieldRefAccess<BibiteOrgan, BibiteGenes>("genes");
         static void Postfix(BibiteMouth __instance)
         {
-            BibiteGenes genes = GenesRef(__instance);
+            BibiteGenes genes = Cache.genes(__instance);
             if (genes.speciesTag == "333immortal") __instance.bitePeriod = 0.05f;
         }
     }
@@ -219,11 +291,9 @@ namespace Bibites_Predatory_Obstacle
     [HarmonyPatch(typeof(BibiteMouth), "UpdateOrgan")]
     public static class OnlyAlivePreySilly
     {
-        public static readonly AccessTools.FieldRef<BibiteOrgan, BibiteGenes> GenesRef = AccessTools.FieldRefAccess<BibiteOrgan, BibiteGenes>("genes");
-
         static void Prefix(BibiteMouth __instance)
         {
-            BibiteGenes genes = GenesRef(__instance);
+            BibiteGenes genes = Cache.genes(__instance);
             if (genes.speciesTag != "333immortal") return;
             if (__instance.nHeld == 0) return;
 
@@ -244,16 +314,14 @@ namespace Bibites_Predatory_Obstacle
     [HarmonyPatch(typeof(BibiteBody), "FixedUpdate")]
     public static class Center
     {
-        public static readonly AccessTools.FieldRef<BibiteBody, Rigidbody2D> Rb2dRef = AccessTools.FieldRefAccess<BibiteBody, Rigidbody2D>("rb2d");
-
         static void Postfix(BibiteBody __instance)
         {
-            if (__instance.gene == null || __instance.gene.speciesTag != "333immortal") return;
+            if (__instance.gene.speciesTag != "333immortal") return;
 
-            Rigidbody2D rb = Rb2dRef(__instance);
+            Rigidbody2D rb = Cache.rb2d(__instance);
             if (rb == null) return;
 
-            bool isBlue = (__instance.gene.GetBodyColor() == new Color(0, 0, 1));
+            bool isBlue = (__instance.gene.GetBodyColor() == GoTowardsHome.Blue);
             if (!isBlue)
             {
                 if (GoTowardsHome.CurrentTarget.TryGetValue(__instance, out BibiteBody target)
@@ -268,7 +336,7 @@ namespace Bibites_Predatory_Obstacle
                 }
                 else
                 {
-                    GoTowardsHome.CurrentTarget.Remove(__instance);
+                    GoTowardsHome.ClearTarget(__instance);
                 }
 
                 if (GoTowardsHome.Home.TryGetValue(__instance, out ZoneSettings homeZone))
@@ -299,7 +367,7 @@ namespace Bibites_Predatory_Obstacle
             if (pos.sqrMagnitude < 0.01f) return;
 
             float maxDistance = ScenarioIndependentSettings.Instance.SimulationSize.val * 1.5f;
-            if (isBlue && pos.sqrMagnitude > maxDistance * maxDistance)
+            if (pos.sqrMagnitude > maxDistance * maxDistance)
             {
                 Vector2 fixdesired = -pos.normalized;
                 float targetAngle = Mathf.Atan2(fixdesired.y, fixdesired.x) * Mathf.Rad2Deg - 90f;
@@ -321,41 +389,82 @@ namespace Bibites_Predatory_Obstacle
         }
     }
 
-    [HarmonyPatch(typeof(BibiteBody), "StartBodyAtGrowthAndNormalize")]
-    public static class DetermineZone
-    {
-        static void Postfix(BibiteBody __instance)
-        {
-            if (__instance.gene == null || __instance.gene.speciesTag != "333immortal" || __instance.gene.GetBodyColor() == new Color(0, 0, 1)) return;
-            if (GoTowardsHome.Home.ContainsKey(__instance)) return;
+    // this is where the bibite's "home" is set up, ensuring they are locked to their initial zone on spawn (if outside of zone, they remain homeless)
 
-            Vector2 pos = __instance.transform.position;
-            float simSize = ScenarioIndependentSettings.Instance.SimulationSize.val;
+    [HarmonyPatch(typeof(BibiteBody), "StartBodyAtGrowthAndNormalize")]
+    public static class Zone
+    {
+        static void Postfix(BibiteBody __instance) => GoTowardsHome.DetermineZone(__instance);
+    }
+
+    [HarmonyPatch(typeof(BibiteBody), "StartBody")]
+    public static class Zone_Fallback
+    {
+        static void Postfix(BibiteBody __instance) => GoTowardsHome.DetermineZone(__instance);
+    }
+
+    [HarmonyPatch(typeof(BibiteBody), nameof(BibiteBody.SaveState))]
+    public static class SaveHome
+    {
+        static void Postfix(BibiteBody __instance, ref JObject __result)
+        {
+            if (__instance.gene.speciesTag == "333immortal" && __instance.gene.GetBodyColor() != GoTowardsHome.Blue && GoTowardsHome.Home.TryGetValue(__instance, out ZoneSettings zone))
+            {
+                __result["homeZoneID"] = zone.zoneID;
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(BibiteBody), nameof(BibiteBody.LoadState))]
+    public static class LoadHome
+    {
+        static void Postfix(BibiteBody __instance, JObject state)
+        {
+            JToken zoneIdToken = state["homeZoneID"];
+            if (zoneIdToken == null) return;
+
+            int zoneId = zoneIdToken.ToObject<int>();
             List<ZoneSettings> allZones = ScenarioSettings.Instance.allZones;
 
-            foreach (ZoneSettings zone in allZones)
+            for (int i = 0; i < allZones.Count; i++)
             {
-                Vector2 zoneCenter = new Vector2(zone.posX.val, zone.posY.val) * simSize;
-                float radius = zone.absoluteRadius;
-                float distSq = (pos - zoneCenter).sqrMagnitude;
-
-                if (distSq <= radius * radius)
+                if (allZones[i].zoneID == zoneId)
                 {
-                    GoTowardsHome.Home[__instance] = zone;
-                    break;
+                    GoTowardsHome.Home[__instance] = allZones[i];
+                    return;
                 }
             }
         }
     }
 
+    // this is cleanup, really important to ensure no memory leaks
+
     [HarmonyPatch(typeof(MenuInitializer), "Start")]
     public static class Cleanup
     {
-        static void Postfix()
+        static void Postfix() => GoTowardsHome.Cleanup();
+    }
+
+    [HarmonyPatch(typeof(GameManager), "StartGame")]
+    public static class AlsoCleanup
+    {
+        static void Prefix() => GoTowardsHome.Cleanup();
+    }
+
+    [HarmonyPatch(typeof(BibiteBody), "OnDestroy")]
+    public static class EvenMoreCleanup
+    {
+        static void Postfix(BibiteBody __instance)
         {
-            GoTowardsHome.LastSeenPrey.Clear();
-            GoTowardsHome.CurrentTarget.Clear();
-            GoTowardsHome.Home.Clear();
+            GoTowardsHome.Home.Remove(__instance);
+            GoTowardsHome.LastSeenPrey.Remove(__instance);
+            GoTowardsHome.ClearTarget(__instance);
+
+            if (GoTowardsHome.TargetedBy.TryGetValue(__instance, out BibiteBody predator))
+            {
+                GoTowardsHome.CurrentTarget.Remove(predator);
+                GoTowardsHome.TargetedBy.Remove(__instance);
+            }
         }
     }
 }
