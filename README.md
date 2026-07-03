@@ -16,7 +16,7 @@ This tag has the following custom effects, causing the bibite to be:
 - Completely ignorant of all food, solely interested in targeting bibites only
 -------------------
 Additionally, the tag also has specific effects depending on the color of the bibite:
-- Unique targeting:
+- Unique behaviors:
   - Purple (`1.000`, `0.500`, `1.000`): Targets the bibite with the most maturity
   - White (`0.000`, `0.000`, `0.000`): Targets the bibite with a mixed of maturity, and distance
     - Formula: (maturity × (maturity + 1)) / (distance² × 0.02 + 1)
