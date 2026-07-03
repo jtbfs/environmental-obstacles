@@ -19,6 +19,7 @@ Additionally, the tag also has specific effects depending on the color of the bi
 - Unique targeting:
   - Purple (`1.000`, `0.500`, `1.000`): Targets the bibite with the most maturity
   - White (`0.000`, `0.000`, `0.000`): Targets the bibite with a mixed of maturity, and distance
+    - Formula: (maturity × (maturity + 1)) / (distance² × 0.02 + 1)
   - Fallback (`Default`): Targets the closest bibite
 -------------------
 This makes it a great way to train the bibites against the "perfect predators", and you can customize it yourself, setting their speed as low as you need it to be. Or allowing them to grab at all times, causing them to instakill the prey on grab. Setting their jaw strength to be low, etc.
