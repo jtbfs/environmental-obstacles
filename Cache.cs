@@ -1,6 +1,4 @@
-using System.Collections.Generic;
 using HarmonyLib;
-using PropertiesScripts;
 using SimulationScripts.BibiteScripts;
 using UnityEngine;
 
@@ -25,7 +23,5 @@ namespace Bibites_Predatory_Obstacle
 
         public static readonly AccessTools.FieldRef<BibiteOrgan, BibiteGenes> cGenes =
             AccessTools.FieldRefAccess<BibiteOrgan, BibiteGenes>("genes");
-
-        public static readonly Dictionary<GrabbableObject, BibiteBody> BodyCache = new Dictionary<GrabbableObject, BibiteBody>();
     }
 }
