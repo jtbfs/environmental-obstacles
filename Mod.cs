@@ -281,16 +281,12 @@ namespace Bibites_Predatory_Obstacle
     }
 
     [HarmonyPatch(typeof(FieldOfView), nameof(FieldOfView.FindSeenEntities))]
-    public static class ClosestPreyOnly
+    public static class BestPreyOnly
     {
         static void Postfix(FieldOfView __instance)
         {
             BibiteBody body = __instance.GetComponent<BibiteBody>();
             if (body.gene.speciesTag != "333immortal") return;
-
-            nPlantsInRange(__instance) = 0;
-            nMeatsInRange(__instance) = 0;
-            nCorpsesInRange(__instance) = 0;
 
             if (!Data.TryGetValue(body, out BibiteData data)) CreateData(body);
 
@@ -343,18 +339,11 @@ namespace Bibites_Predatory_Obstacle
 
             if (closestIndex >= 0)
             {
-                __instance.seenBibites[0] = __instance.seenBibites[closestIndex];
-                __instance.bibiteWeights[0] = __instance.bibiteWeights[closestIndex];
-                nBibitesInRange(__instance) = 1;
                 data.LastSeenPrey = Time.fixedTime;
-                BibiteBody newTarget = __instance.seenBibites[0];
+                BibiteBody newTarget = __instance.seenBibites[closestIndex];
                 if (data.CurrentTarget != newTarget) SetTarget(body, __instance.seenBibites[0]);
             }
-            else
-            {
-                nBibitesInRange(__instance) = 0;
-                ClearTarget(body);
-            }
+            else ClearTarget(body);
         }
     }
 
