@@ -45,6 +45,7 @@ namespace Bibites_Predatory_Obstacle
             public float LastSeenPrey;
             public Rigidbody2D Rigidbody;
             public Transform PredatorTransform;
+            public Transform PreyTransform;
         }
         public static readonly Dictionary<BibiteBody, HashSet<BibiteBody>> TargetedBy = new Dictionary<BibiteBody, HashSet<BibiteBody>>();
         public static readonly Dictionary<BibiteBody, BibiteData> Data = new Dictionary<BibiteBody, BibiteData>();
@@ -120,6 +121,7 @@ namespace Bibites_Predatory_Obstacle
             ClearTarget(predator);
             BibiteData data = Data[predator];
             data.CurrentTarget = prey;
+            data.PreyTransform = prey.transform;
 
             if (!TargetedBy.TryGetValue(prey, out HashSet<BibiteBody> predators))
             {
@@ -134,6 +136,7 @@ namespace Bibites_Predatory_Obstacle
             BibiteBody prey = predatorData.CurrentTarget;
             if (prey == null) return;
             predatorData.CurrentTarget = null;
+            predatorData.PreyTransform = null;
 
             if (TargetedBy.TryGetValue(prey, out HashSet<BibiteBody> predators))
             {
@@ -463,7 +466,7 @@ namespace Bibites_Predatory_Obstacle
                     && !target.dead
                     && !target.dying)
                 {
-                    Vector2 dir = (target.transform.position - data.PredatorTransform.position).normalized;
+                    Vector2 dir = (data.PreyTransform.position - data.PredatorTransform.position).normalized;
                     float targetAngle = Mathf.Atan2(dir.y, dir.x) * Mathf.Rad2Deg - 90f;
                     rb.MoveRotation(targetAngle);
                     return;
@@ -610,6 +613,7 @@ namespace Bibites_Predatory_Obstacle
                     if (Data.TryGetValue(predator, out BibiteData predatorData))
                     {
                         predatorData.CurrentTarget = null;
+                        predatorData.PreyTransform = null;
                     }
                 }
                 TargetedBy.Remove(__instance);
