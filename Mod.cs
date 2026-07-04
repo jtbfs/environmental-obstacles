@@ -341,7 +341,7 @@ namespace Bibites_Predatory_Obstacle
             {
                 data.LastSeenPrey = Time.fixedTime;
                 BibiteBody newTarget = __instance.seenBibites[closestIndex];
-                if (data.CurrentTarget != newTarget) SetTarget(body, __instance.seenBibites[0]);
+                if (data.CurrentTarget != newTarget) SetTarget(body, newTarget);
             }
             else ClearTarget(body);
         }
