@@ -26,7 +26,6 @@ namespace Bibites_Predatory_Obstacle
 
     public static class Variables
     {
-        public static float Delay = 5f;
         public static float SimSize = 1;
         public static float Threshold = 1;
         public static float ThresholdSquare = 1;
@@ -41,10 +40,11 @@ namespace Bibites_Predatory_Obstacle
         {
             public BibiteType ColorType;
             public ZoneSettings Home;
+            public bool Homeless = false;
             public BibiteBody CurrentTarget;
             public float LastSeenPrey;
             public Rigidbody2D Rigidbody;
-            public Transform transform;
+            public Transform PredatorTransform;
         }
         public static readonly Dictionary<BibiteBody, HashSet<BibiteBody>> TargetedBy = new Dictionary<BibiteBody, HashSet<BibiteBody>>();
         public static readonly Dictionary<BibiteBody, BibiteData> Data = new Dictionary<BibiteBody, BibiteData>();
@@ -67,31 +67,29 @@ namespace Bibites_Predatory_Obstacle
             set.Clear();
             Pool.Push(set);
         }
-        public static void CreateData(BibiteBody bibite)
+        public static void CreateData(BibiteBody bibite, bool assignZone = true)
         {
             if (bibite.gene.speciesTag != "333immortal") return;
             Color color = bibite.gene.GetBodyColor();
 
-            BibiteData data = new BibiteData();
-
-            data.ColorType = BibiteType.Default;
-            data.Rigidbody = rb2d(bibite);
-            data.transform = bibite.transform;
+            BibiteData data = new BibiteData
+            {
+                ColorType = BibiteType.Default,
+                Rigidbody = rb2d(bibite),
+                PredatorTransform = bibite.transform
+            };
 
             if (color == Blue) data.ColorType = BibiteType.Rammer;
             else if (color == Purple) data.ColorType = BibiteType.Witch;
             else if (color == White) data.ColorType = BibiteType.Mixed;
 
             Data[bibite] = data;
-        }
-        public static void DetermineZone(BibiteBody bibite)
-        {
-            CreateSimData();
-            if (bibite.gene.speciesTag != "333immortal") return;
-            BibiteData data = Data[bibite];
-            if (data.ColorType == BibiteType.Rammer || data.Home != null) return;
 
-            Vector2 pos = data.transform.position;
+            CreateSimData();
+
+            if (data.ColorType == BibiteType.Rammer || data.Home != null || data.Homeless || !assignZone) return;
+
+            Vector2 pos = data.PredatorTransform.position;
 
             if (AllZones == null) return;
 
@@ -108,10 +106,20 @@ namespace Bibites_Predatory_Obstacle
                 }
             }
         }
+        public static void CreateSimData()
+        {
+            if (SimSizeCheck) return;
+            SimSize = ScenarioIndependentSettings.Instance.SimulationSize.val;
+            Threshold = SimSize * 1.5f;
+            ThresholdSquare = Threshold * Threshold;
+            AllZones = ScenarioSettings.Instance.allZones;
+            SimSizeCheck = true;
+        }
         public static void SetTarget(BibiteBody predator, BibiteBody prey)
         {
             ClearTarget(predator);
-            Data[predator].CurrentTarget = prey;
+            BibiteData data = Data[predator];
+            data.CurrentTarget = prey;
 
             if (!TargetedBy.TryGetValue(prey, out HashSet<BibiteBody> predators))
             {
@@ -136,15 +144,6 @@ namespace Bibites_Predatory_Obstacle
                     ReturnSet(predators);
                 }
             }
-        }
-        public static void CreateSimData()
-        {
-            if (SimSizeCheck) return;
-            SimSize = ScenarioIndependentSettings.Instance.SimulationSize.val;
-            Threshold = SimSize * 1.5f;
-            ThresholdSquare = Threshold * Threshold;
-            AllZones = ScenarioSettings.Instance.allZones;
-            SimSizeCheck = true;
         }
         public static void Cleanup()
         {
@@ -287,17 +286,17 @@ namespace Bibites_Predatory_Obstacle
         static void Postfix(FieldOfView __instance)
         {
             BibiteBody body = __instance.GetComponent<BibiteBody>();
-            if (body == null || body.gene.speciesTag != "333immortal") return;
+            if (body.gene.speciesTag != "333immortal") return;
 
             nPlantsInRange(__instance) = 0;
             nMeatsInRange(__instance) = 0;
             nCorpsesInRange(__instance) = 0;
 
-            BibiteData data = Data[body];
+            if (!Data.TryGetValue(body, out BibiteData data)) CreateData(body);
 
             int nBibites = nBibitesInRange(__instance);
             int closestIndex = -1;
-            Vector2 bodyPos = data.transform.position;
+            Vector2 bodyPos = data.PredatorTransform.position;
             var type = data.ColorType;
             bool isSpecial = type == BibiteType.Witch;
             bool isMixed = type == BibiteType.Mixed;
@@ -347,8 +346,9 @@ namespace Bibites_Predatory_Obstacle
                 __instance.seenBibites[0] = __instance.seenBibites[closestIndex];
                 __instance.bibiteWeights[0] = __instance.bibiteWeights[closestIndex];
                 nBibitesInRange(__instance) = 1;
-                data.LastSeenPrey = Time.time;
-                SetTarget(body, __instance.seenBibites[0]);
+                data.LastSeenPrey = Time.fixedTime;
+                BibiteBody newTarget = __instance.seenBibites[0];
+                if (data.CurrentTarget != newTarget) SetTarget(body, __instance.seenBibites[0]);
             }
             else
             {
@@ -398,7 +398,7 @@ namespace Bibites_Predatory_Obstacle
         {
             if (__instance.gene.speciesTag != "333immortal") return;
 
-            BibiteData data = Data[__instance];
+            if (!Data.TryGetValue(__instance, out BibiteData data)) CreateData(__instance);
 
             Rigidbody2D rb = data.Rigidbody;
             if (rb == null) return;
@@ -411,7 +411,7 @@ namespace Bibites_Predatory_Obstacle
                     && !target.dead
                     && !target.dying)
                 {
-                    Vector2 dir = (target.transform.position - data.transform.position).normalized;
+                    Vector2 dir = (target.transform.position - data.PredatorTransform.position).normalized;
                     float targetAngle = Mathf.Atan2(dir.y, dir.x) * Mathf.Rad2Deg - 90f;
                     rb.MoveRotation(targetAngle);
                     return;
@@ -425,7 +425,7 @@ namespace Bibites_Predatory_Obstacle
                 {
                     Vector2 zoneCenter = new Vector2(homeZone.posX.val, homeZone.posY.val) * SimSize;
                     float radius = homeZone.absoluteRadius;
-                    Vector2 toCenter = zoneCenter - (Vector2)data.transform.position;
+                    Vector2 toCenter = zoneCenter - (Vector2)data.PredatorTransform.position;
 
                     if (toCenter.sqrMagnitude > radius * radius)
                     {
@@ -436,13 +436,13 @@ namespace Bibites_Predatory_Obstacle
                     }
                 }
 
-                if (data.LastSeenPrey == 0f)
+                if (data.LastSeenPrey == 0)
                 {
-                    data.LastSeenPrey = Time.time;
+                    data.LastSeenPrey = Time.fixedTime;
                     return;
                 }
                 float lastTime = data.LastSeenPrey;
-                if (Time.time - lastTime < Delay) return;
+                if (Time.fixedTime - lastTime < 5) return;
             }
 
             Vector2 pos = rb.position;
@@ -471,28 +471,6 @@ namespace Bibites_Predatory_Obstacle
         }
     }
 
-    // this is where the bibite's "home" is set up, ensuring they are locked to their initial zone on spawn (if outside of zone, they remain homeless)
-
-    [HarmonyPatch(typeof(BibiteBody), "StartBodyAtGrowthAndNormalize")]
-    public static class Zone
-    {
-        static void Postfix(BibiteBody __instance)
-        {
-            CreateData(__instance);
-            DetermineZone(__instance);
-        }
-    }
-
-    [HarmonyPatch(typeof(BibiteBody), "StartBody")]
-    public static class Zone_Fallback
-    {
-        static void Postfix(BibiteBody __instance)
-        {
-            CreateData(__instance);
-            DetermineZone(__instance);
-        }
-    }
-
     [HarmonyPatch(typeof(BibiteBody), nameof(BibiteBody.SaveState))]
     public static class SaveHome
     {
@@ -500,9 +478,14 @@ namespace Bibites_Predatory_Obstacle
         {
             if (__instance.gene.speciesTag == "333immortal")
             {
-                BibiteData data = Data[__instance];
-                if (data.ColorType != BibiteType.Rammer && data.Home != null)
-                __result["homeZoneID"] = data.Home.zoneID;
+                if (Data.TryGetValue(__instance, out BibiteData data))
+                {
+                    if (data.ColorType != BibiteType.Rammer)
+                    {
+                        if (data.Home != null) __result["homeZoneID"] = data.Home.zoneID;
+                        else __result["homeZoneID"] = -1;
+                    }
+                }
             }
         }
     }
@@ -514,17 +497,27 @@ namespace Bibites_Predatory_Obstacle
         {
             CreateSimData();
             if (__instance.gene.speciesTag != "333immortal") return;
-            CreateData(__instance);
             JToken zoneIdToken = state["homeZoneID"];
             if (zoneIdToken == null) return;
 
-            int zoneId = zoneIdToken.ToObject<int>();
+            if (!Data.TryGetValue(__instance, out BibiteData data))
+            {
+                CreateData(__instance, false);
+                data = Data[__instance];
+            }
 
+            int zoneId = zoneIdToken.ToObject<int>();
+            if (zoneId == -1)
+            {
+                data.Homeless = true;
+                data.Home = null;
+                return;
+            }
             for (int i = 0; i < AllZones.Count; i++)
             {
                 if (AllZones[i].zoneID == zoneId)
                 {
-                    Data[__instance].Home = AllZones[i];
+                    data.Home = AllZones[i];
                     return;
                 }
             }
@@ -543,6 +536,7 @@ namespace Bibites_Predatory_Obstacle
     public static class AlsoCleanup
     {
         static void Prefix() => Cleanup();
+
         static void Postfix() => CreateSimData();
     }
 
@@ -562,7 +556,9 @@ namespace Bibites_Predatory_Obstacle
                 foreach (BibiteBody predator in predators)
                 {
                     if (Data.TryGetValue(predator, out BibiteData predatorData))
+                    {
                         predatorData.CurrentTarget = null;
+                    }
                 }
                 TargetedBy.Remove(__instance);
                 ReturnSet(predators);
