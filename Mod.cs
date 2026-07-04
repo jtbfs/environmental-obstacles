@@ -9,8 +9,8 @@ using SimulationScripts;
 using SimulationScripts.BibiteScripts;
 using UIScripts;
 using UnityEngine;
-using static Bibites_Predatory_Obstacle.Variables;
 using static Bibites_Predatory_Obstacle.Cache;
+using static Bibites_Predatory_Obstacle.Variables;
 
 namespace Bibites_Predatory_Obstacle
 {
@@ -69,7 +69,7 @@ namespace Bibites_Predatory_Obstacle
         }
         public static void CreateData(BibiteBody bibite, bool assignZone = true)
         {
-            if (bibite.gene.speciesTag != "333immortal") return;
+            if (bibite.gene.speciesTag != "333immortal" || Data.ContainsKey(bibite)) return;
             Color color = bibite.gene.GetBodyColor();
 
             BibiteData data = new BibiteData
@@ -288,62 +288,121 @@ namespace Bibites_Predatory_Obstacle
             BibiteBody body = __instance.GetComponent<BibiteBody>();
             if (body.gene.speciesTag != "333immortal") return;
 
-            if (!Data.TryGetValue(body, out BibiteData data)) CreateData(body);
+            if (!Data.TryGetValue(body, out BibiteData data))
+            {
+                CreateData(body);
+                data = Data[body];
+            }
 
-            int nBibites = nBibitesInRange(__instance);
-            int closestIndex = -1;
+            int count = nBibitesInRange(__instance);
+            int bestIndex = -1;
             Vector2 bodyPos = data.PredatorTransform.position;
             var type = data.ColorType;
-            bool isSpecial = type == BibiteType.Witch;
-            bool isMixed = type == BibiteType.Mixed;
-            float Value = float.MaxValue;
-            if (isSpecial || isMixed) Value = float.MinValue;
 
-            for (int i = 0; i < nBibites; i++)
+            int i = count - 1;
+            var seenBibites = __instance.seenBibites;
+            var weights = __instance.bibiteWeights;
+            switch (type)
             {
-                BibiteBody seen = __instance.seenBibites[i];
-                if (seen == null || seen.dead || seen.dying || seen.gene.speciesTag == "333immortal") continue;
+                case BibiteType.Witch:
+                    float witchValue = float.MinValue;
+                    while (i >= 0)
+                    {
+                        BibiteBody seen = seenBibites[i];
 
-                if (isSpecial)
-                {
-                    float maturity = seen.growth.maturity;
-                    if (maturity > Value)
-                    {
-                        Value = maturity;
-                        closestIndex = i;
+                        if (seen == null || seen.dead || seen.dying || seen.gene.speciesTag == "333immortal")
+                        {
+                            count--;
+                            if (i != count)
+                            {
+                                seenBibites[i] = seenBibites[count];
+                                weights[i] = weights[count];
+
+
+                                if (bestIndex == count) bestIndex = i;
+                            }
+                            else i--;
+                        }
+                        else
+                        {
+                            float maturity = seen.growth.maturity;
+                            if (maturity > witchValue) { witchValue = maturity; bestIndex = i; }
+                            i--;
+                        }
                     }
-                }
-                else if (isMixed)
-                {
-                    float maturity = seen.growth.maturity;
-                    Vector2 seenPos = seen.transform.position;
-                    float distance = (bodyPos - seenPos).sqrMagnitude;
-                    float score = (maturity * (maturity + 1)) / (distance * 0.02f + 1f);
-                    if (score > Value)
+                    break;
+
+                case BibiteType.Mixed:
+                    float mixedValue = float.MinValue;
+                    while (i >= 0)
                     {
-                        Value = score;
-                        closestIndex = i;
+                        BibiteBody seen = seenBibites[i];
+
+                        if (seen == null || seen.dead || seen.dying || seen.gene.speciesTag == "333immortal")
+                        {
+                            count--;
+                            if (i != count)
+                            {
+                                seenBibites[i] = seenBibites[count];
+                                weights[i] = weights[count];
+
+                                if (bestIndex == count) bestIndex = i;
+                            }
+                            else i--;
+                        }
+                        else
+                        {
+                            float mixedMaturity = seen.growth.maturity;
+                            Vector2 seenPos = seen.transform.position;
+                            float mixedDistance = (bodyPos - seenPos).sqrMagnitude;
+                            float score = (mixedMaturity * (mixedMaturity + 1)) / (mixedDistance * 0.02f + 1f);
+                            if (score > mixedValue) { mixedValue = score; bestIndex = i; }
+                            i--;
+                        }
                     }
-                }
-                else
-                {
-                    Vector2 seenPos = seen.transform.position;
-                    float distance = (seenPos - bodyPos).sqrMagnitude;
-                    if (distance < Value)
+                    break;
+
+                default:
+                    float defaultValue = float.MaxValue;
+                    while (i >= 0)
                     {
-                        Value = distance;
-                        closestIndex = i;
+                        BibiteBody seen = seenBibites[i];
+
+                        if (seen == null || seen.dead || seen.dying || seen.gene.speciesTag == "333immortal")
+                        {
+                            count--;
+                            if (i != count)
+                            {
+                                seenBibites[i] = seenBibites[count];
+                                weights[i] = weights[count];
+
+                                if (bestIndex == count) bestIndex = i;
+                            }
+                            else i--;
+                        }
+                        else
+                        {
+                            Vector2 closestSeenPos = seen.transform.position;
+                            float closestDistance = (closestSeenPos - bodyPos).sqrMagnitude;
+                            if (closestDistance < defaultValue) { defaultValue = closestDistance; bestIndex = i; }
+                            i--;
+                        }
                     }
-                }
+                    break;
             }
 
-            if (closestIndex >= 0)
+            nBibitesInRange(__instance) = count;
+
+            if (bestIndex >= 0)
             {
                 data.LastSeenPrey = Time.fixedTime;
-                BibiteBody newTarget = __instance.seenBibites[closestIndex];
+                BibiteBody newTarget = seenBibites[bestIndex];
                 if (data.CurrentTarget != newTarget) SetTarget(body, newTarget);
             }
-            else ClearTarget(body);
+            else
+            {
+                ClearTarget(body);
+            }
         }
     }
 
@@ -387,7 +446,11 @@ namespace Bibites_Predatory_Obstacle
         {
             if (__instance.gene.speciesTag != "333immortal") return;
 
-            if (!Data.TryGetValue(__instance, out BibiteData data)) CreateData(__instance);
+            if (!Data.TryGetValue(__instance, out BibiteData data))
+            {
+                CreateData(__instance);
+                data = Data[__instance];
+            }
 
             Rigidbody2D rb = data.Rigidbody;
             if (rb == null) return;
